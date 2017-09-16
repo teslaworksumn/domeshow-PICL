@@ -44,6 +44,17 @@ int setup(void) {
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
     RPINR18bits.U1RXR = 9;      //Use Pin RP9 = "9", for UART Rx (Table 10-2)
     __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
+    IEC0bits.U1TXIE = 1;        //Enable interrupt
+    IPC2bits.U1RXIP = 7;        //Set interrupt priority
+    U1MODEbits.UARTEN = 1;
+    U1MODEbits.UEN = 0;
+    U1MODEbits.ABAUD = 1;
+    U1MODEbits.BRGH = 1;        //High Speed
+    U1MODEbits.PDSEL = 0;       //8-bit data, no parity
+    U1MODEbits.STSEL = 1;       //2 Stop Bits
+    U1STAbits.UTXEN = 0;        //Disable transmission
+    U1STAbits.URXISEL = 0;      //TODO: Double-check this!!
+    //U1STAbits.ADDEN = 0;        //Address mode detect?
     
     //OC Setup
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
@@ -64,6 +75,14 @@ int setup(void) {
     */
     
     return 0;
+}
+
+void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
+    if(_U1RXIF == 1) {   //If interrupt on EUART receive
+        if(U1STAbits.FERR == 1) {
+            asm("btg LATB, #5");
+        }
+    }
 }
 
 int main(void) {
