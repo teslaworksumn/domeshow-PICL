@@ -98,19 +98,6 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
         }
         temp = (char) U1RXREG;      // Use this data. Implementation to come.
     }
-    
-    // Remove this once the above is verified to work.
-    // This is the part where OERR isn't set while receiving data from the 16 channels.. Interesting
-    /*
-    if(_U1RXIF == 1) {   // If interrupt on UART receive
-        //_U1RXIF = 0;
-        if(U1STAbits.OERR == 1) {
-            U1STAbits.OERR = 0;
-        //if(U1STAbits.FERR == 1) {
-            asm("btg LATB, #5");
-        }
-    }
-    */
 }
 
 int main(void) {
