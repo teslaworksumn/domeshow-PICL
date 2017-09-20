@@ -11,13 +11,15 @@
 #include "xc.h"
 #include <p24Fxxxx.h>
 
+#define CHIP_CHANNELS 5
+#define BOARD_CHANNELS 16
+
 // CW1: FLASH CONFIGURATION WORD 1 (see PIC24 Family Reference Manual 24.1)
 #pragma config FWDTEN = OFF         // Watchdog Timer Enable (Watchdog Timer is disabled)
 #pragma config GWRP = OFF           // General Code Segment Write Protect (Writes to program memory are allowed)
 #pragma config ICS = PGx1           // Comm Channel Select (Emulator EMUC1/EMUD1 pins are shared with PGC1/PGD1)
 #pragma config GCP = OFF            // General Code Segment Code Protect (Code protection is disabled)
 #pragma config JTAGEN = OFF         // JTAG Port Enable (JTAG port is disabled)
-
 
 // CW2: FLASH CONFIGURATION WORD 2 (see PIC24 Family Reference Manual 24.1)
 #pragma config I2C1SEL = PRI        // I2C1 Pin Location Select (Use default SCL1/SDA1 pins)
@@ -27,6 +29,17 @@
                                     // Fail-Safe Clock Monitor is enabled)
 #pragma config FNOSC = FRCPLL       // Oscillator Select (Fast RC Oscillator with PLL module (FRCPLL))
 
+int channel = 0;                    // Channel we're currently at in DMX frame
+int start_address, end_address;     // Start and end DMX addresses on chip
+
+int board_address = 0;             // Address of board for channel calculations
+int chip_number = 0;               // Chip number on board
+int chip_channel = 0;              // Channel on chip
+int levels[CHIP_CHANNELS];         // Hold new output levels
+
+char break_seen = 0;                // If we've seen a frame break
+char temp;                          // Where trash DMX bytes get stored
+char dataByte;                      // Where good DMX bytes get stored
 
 int setup(void) {
     // Set up clock
@@ -37,12 +50,32 @@ int setup(void) {
     CLKDIVbits.DOZEN = 1;
     CLKDIVbits.DOZE = 0;            // Peripheral post scaler 1:1
     
-    //Pin Configuration
+    // Pin Configuration
     AD1PCFG = 0x9fff;               // All pins digital.
     TRISA = 0;                      // Take care of specific I/O later
-    TRISB = 0;                      // UART will override, as will PPS for OC
+    TRISB = 0;                      // UART will override, as will PPS for OC   
     
-    //UART Setup
+    // DIP Switch address calculation
+    // Pin assignments done via spreadsheet in Google Drive
+    /*
+    TRISA |= 0x001f; //Set up inputs
+    TRISB |= 0x0018; //Set up inputs
+     
+    // Might need to do some stuff with pull-up resistors here?
+    chip_number = (PORTAbits.RA1<<1) + (PORTAbits.RA0);
+    board_address = (PORTAbits.RA4<<4) + (PORTBbits.RB4<<3) + (PORTAbits.RA3<<2) 
+            + (PORTAbits.RA2<<1) + (PORTBbits.RB3);
+    */
+    
+    board_address = 0;
+    chip_number = 0;
+    
+    // These get set based off the previous two variables
+    // Adding the +1s for 1 indexing in DMX. If we get mismatches, remove those.
+    start_address = (board_address*BOARD_CHANNELS + chip_number*CHIP_CHANNELS) + 1;
+    end_address = (board_address*BOARD_CHANNELS + chip_number*CHIP_CHANNELS + CHIP_CHANNELS) + 1;
+    
+    // UART Setup
     TRISBbits.TRISB9 = 1;
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
     RPINR18bits.U1RXR = 9;          // Use Pin RP9 = "9", for UART Rx (Table 10-2)
@@ -58,7 +91,14 @@ int setup(void) {
     U1STAbits.UTXEN = 0;            // Disable transmission
     U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
     
-    //OC Setup
+    // Timer Setup
+    T1CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
+    T1CONbits.TCKPS = 0b01;         // 1/8 system clock
+    TMR1 = 0;
+    PR1 = 255;
+    T1CONbits.TON = 1;
+    
+    // OC Setup
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
     RPOR5bits.RP11R = 18;           // OC1
     RPOR6bits.RP12R = 19;           // OC2
@@ -67,42 +107,78 @@ int setup(void) {
     RPOR7bits.RP15R = 22;           // OC5
     __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
     
-    //Not using this yet because configuration is different between PICs
-    /*
     OC1CON1 = 0;
-    OC1CON1bits.OCTSEL = ___;
-    OC1CON1bits.OCM = 110;
+    OC1CON1bits.OCTSEL = 4;         // Use Timer1
+    OC1CON1bits.OCM = 0b110;          // Edge-aligned PWM
     OC1CON2 = 0;
     //OCxCON2bits.OCINV lets you invert the output. 
-    */
+    
+    OC2CON1 = 0x1006;
+    OC2CON2 = 0;
+    OC3CON1 = 0x1006;
+    OC3CON2 = 0;
+    OC4CON1 = 0x1006;
+    OC4CON2 = 0;
+    OC5CON1 = 0x1006;
+    OC5CON2 = 0;
+    
+    OC1RS = 255;
+    OC2RS = 255;
+    OC3RS = 255;
+    OC4RS = 255;
+    OC5RS = 255;
     
     return 0;
 }
 
-char break_seen = 0;
-
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
-    char temp;
-
     _U1RXIF = 0;
-    if (U1STAbits.FERR == 1) {      // Framing error, discard this byte   
-        temp = (char) U1RXREG;      // Read receive register
+    if (U1STAbits.FERR == 1) {      // Framing error 
+        U1STAbits.FERR = 0;         // Clear framing error
         break_seen = 1;             // Remember that we have seen a break
-        U1STAbits.FERR = 0;         // Don't save character anywhere
         
-        asm("btg LATB, #5");        // Remove this when finished with dev
+        temp = (char) U1RXREG;      // Read receive register
+        
+        // TODO: Remove this when finished with dev
+        asm("btg LATB, #5");
     }
     else {                          // No framing error, use this byte
         if (break_seen) {           // Last character was a break, so new frame
             break_seen = 0;         // Clear the break flag.
+            
+            // I'm fairly sure this line goes here, but not 100%
+            channel = 0;            // Reset channel count
+            chip_channel = 0;       // Reset chip channel count
+
         }
-        temp = (char) U1RXREG;      // Use this data. Implementation to come.
+        else {
+            // If we're not starting over at the beginning of the frame, move on
+            channel++;
+        }
+        
+        dataByte = (char) U1RXREG;  // Get the data
+        
+        // If channels are within the range on this chip, write them to local
+        if (start_address <= channel && channel < end_address) {
+            levels[chip_channel] = dataByte;
+            chip_channel++;
+        }
+        // Last chip only grabs one channel
+        else if (chip_number == 4 && channel == start_address) {
+            levels[0] = dataByte;
+        }
     }
 }
 
 int main(void) {
     setup();
     while(1) {
+        // Write to OCRx registers
+        OC1R = levels[0];
+        OC2R = levels[1];
+        OC3R = levels[2];
+        OC4R = levels[3];
+        OC5R = levels[4];
     }
     return 0;
 }

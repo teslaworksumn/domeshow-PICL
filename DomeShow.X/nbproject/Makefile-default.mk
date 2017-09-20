@@ -89,8 +89,8 @@ ifneq ($(INFORMATION_MESSAGE), )
 endif
 	${MAKE}  -f nbproject/Makefile-default.mk dist/${CND_CONF}/${IMAGE_TYPE}/DomeShow.X.${IMAGE_TYPE}.${OUTPUT_SUFFIX}
 
-MP_PROCESSOR_OPTION=24FJ64GA002
-MP_LINKER_FILE_OPTION=,--script=p24FJ64GA002.gld
+MP_PROCESSOR_OPTION=24FJ32GA102
+MP_LINKER_FILE_OPTION=,--script=p24FJ32GA102.gld
 # ------------------------------------------------------------------------------------
 # Rules for buildStep: compile
 ifeq ($(TYPE_IMAGE), DEBUG_RUN)
