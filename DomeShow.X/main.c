@@ -11,7 +11,7 @@
 #include "xc.h"
 #include <p24Fxxxx.h>
 
-#define CHIP_CHANNELS 5
+#define CHIP_CHANNELS 4
 #define BOARD_CHANNELS 16
 
 // CW1: FLASH CONFIGURATION WORD 1 (see PIC24 Family Reference Manual 24.1)
@@ -49,6 +49,7 @@ int setup(void) {
     CLKDIVbits.RCDIV = 0;           // FRC oscillator post scaler 1:1
     CLKDIVbits.DOZEN = 1;
     CLKDIVbits.DOZE = 0;            // Peripheral post scaler 1:1
+    //OSCTUNbits.TUN = 0b011111;
     
     // Pin Configuration
     AD1PCFG = 0x9fff;               // All pins digital.
@@ -104,7 +105,7 @@ int setup(void) {
     RPOR6bits.RP12R = 19;           // OC2
     RPOR6bits.RP13R = 20;           // OC3
     RPOR7bits.RP14R = 21;           // OC4
-    RPOR7bits.RP15R = 22;           // OC5
+    //RPOR7bits.RP15R = 22;           // OC5
     __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
     
     OC1CON1 = 0;
@@ -119,14 +120,14 @@ int setup(void) {
     OC3CON2 = 0;
     OC4CON1 = 0x1006;
     OC4CON2 = 0;
-    OC5CON1 = 0x1006;
-    OC5CON2 = 0;
+    //OC5CON1 = 0x1006;
+    //OC5CON2 = 0;
     
     OC1RS = 255;
     OC2RS = 255;
     OC3RS = 255;
     OC4RS = 255;
-    OC5RS = 255;
+    //OC5RS = 255;
     
     return 0;
 }
@@ -149,7 +150,7 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
             // I'm fairly sure this line goes here, but not 100%
             channel = 0;            // Reset channel count
             chip_channel = 0;       // Reset chip channel count
-
+            //asm("btg LATB, #6");
         }
         else {
             // If we're not starting over at the beginning of the frame, move on
@@ -163,10 +164,6 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
             levels[chip_channel] = dataByte;
             chip_channel++;
         }
-        // Last chip only grabs one channel
-        else if (chip_number == 4 && channel == start_address) {
-            levels[0] = dataByte;
-        }
     }
 }
 
@@ -178,7 +175,7 @@ int main(void) {
         OC2R = levels[1];
         OC3R = levels[2];
         OC4R = levels[3];
-        OC5R = levels[4];
+        //OC5R = levels[4];
     }
     return 0;
 }
