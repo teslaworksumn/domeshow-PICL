@@ -27,7 +27,8 @@
 #pragma config OSCIOFNC = 1         // Primary Oscillator I/O Function (CLKO functions as I/O pin)
 #pragma config FCKSM = CSECME       // Clock Switching and Monitor (Clock switching is enabled, 
                                     // Fail-Safe Clock Monitor is enabled)
-#pragma config FNOSC = FRCPLL       // Oscillator Select (Fast RC Oscillator with PLL module (FRCPLL))
+#pragma config POSCMOD = EC         // Use External Clock
+#pragma config FNOSC = 0b10         // Oscillator Select (External Clock)
 
 int channel = 0;                    // Channel we're currently at in DMX frame
 int start_address, end_address;     // Start and end DMX addresses on chip
@@ -36,6 +37,8 @@ int board_address = 0;             // Address of board for channel calculations
 int chip_number = 0;               // Chip number on board
 int chip_channel = 0;              // Channel on chip
 int levels[CHIP_CHANNELS];         // Hold new output levels
+
+int tempLevel = 0;
 
 char break_seen = 0;                // If we've seen a frame break
 char temp;                          // Where trash DMX bytes get stored
@@ -94,10 +97,18 @@ int setup(void) {
     
     // Timer Setup
     T1CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
-    T1CONbits.TCKPS = 0b01;         // 1/8 system clock
+    T1CONbits.TCKPS = 0b00;         // 1:1 with system clock
     TMR1 = 0;
-    PR1 = 255;
+    PR1 = 256;
     T1CONbits.TON = 1;
+    
+    T2CONbits.T32 = 0;
+    T2CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
+    T2CONbits.TCKPS = 0b00;         // 1/8 system clock
+    TMR2 = 0;
+    PR2 = 65535;
+    _T2IE = 1;
+    T2CONbits.TON = 1;
     
     // OC Setup
     __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
@@ -111,17 +122,21 @@ int setup(void) {
     OC1CON1 = 0;
     OC1CON1bits.OCTSEL = 4;         // Use Timer1
     OC1CON1bits.OCM = 0b110;          // Edge-aligned PWM
-    OC1CON2 = 0;
+    OC1CON2bits.SYNCSEL = 0b01011;
+    OC1CON2 = 0x0000;
     //OCxCON2bits.OCINV lets you invert the output. 
     
     OC2CON1 = 0x1006;
-    OC2CON2 = 0;
+    OC2CON2 = 0x0000;
     OC3CON1 = 0x1006;
-    OC3CON2 = 0;
+    OC3CON2 = 0x0000;
     OC4CON1 = 0x1006;
-    OC4CON2 = 0;
+    OC4CON2 = 0x0000;
     //OC5CON1 = 0x1006;
     //OC5CON2 = 0;
+    OC2CON2bits.SYNCSEL = 0b01011;
+    OC3CON2bits.SYNCSEL = 0b01011;
+    OC4CON2bits.SYNCSEL = 0b01011;
     
     OC1RS = 255;
     OC2RS = 255;
@@ -131,6 +146,28 @@ int setup(void) {
     
     return 0;
 }
+
+void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt() {
+    _T2IF = 0;
+    
+    /*
+    tempLevel += 5;
+    OC4R = tempLevel;
+    if(tempLevel == 255) {
+        tempLevel = 0;
+    }
+    */
+    // Write to OCRx registers
+    
+    OC1R = levels[0];
+    OC2R = levels[1];
+    OC3R = levels[2];
+    OC4R = levels[3];
+    //OC5R = levels[4];
+    asm("btg LATB, #15");
+    
+}
+
 
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     _U1RXIF = 0;
@@ -169,13 +206,10 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
 
 int main(void) {
     setup();
+    //OC4R = 255;
+    //OC3R = 125;
     while(1) {
-        // Write to OCRx registers
-        OC1R = levels[0];
-        OC2R = levels[1];
-        OC3R = levels[2];
-        OC4R = levels[3];
-        //OC5R = levels[4];
+        //OC4R = tempLevel;
     }
     return 0;
 }
