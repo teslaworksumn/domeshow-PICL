@@ -27,8 +27,11 @@
 #pragma config OSCIOFNC = 1         // Primary Oscillator I/O Function (CLKO functions as I/O pin)
 #pragma config FCKSM = CSECME       // Clock Switching and Monitor (Clock switching is enabled, 
                                     // Fail-Safe Clock Monitor is enabled)
-#pragma config POSCMOD = EC         // Use External Clock
-#pragma config FNOSC = 0b10         // Oscillator Select (External Clock)
+//#pragma config POSCMOD = EC         // Use External Clock
+//#pragma config POSCMOD = XT         // Use External Clock
+//#pragma config FNOSC = 0b10         // Oscillator Select (External Clock)
+//#pragma config FNOSC = PRI         // Oscillator Select (External Clock)
+#pragma config FNOSC = FRCPLL
 
 int channel = 0;                    // Channel we're currently at in DMX frame
 int start_address, end_address;     // Start and end DMX addresses on chip
@@ -91,9 +94,10 @@ int setup(void) {
     U1MODEbits.BRGH = 1;            // Use high speed baud rate generation
     U1BRG = 15;                     // 250 kilobit per second baud rate
     U1MODEbits.PDSEL = 0;           // 8-bit data, no parity
+    U1MODEbits.WAKE = 1;            // Wake on receiving start bit
     U1MODEbits.STSEL = 1;           // 2 stop bits
     U1STAbits.UTXEN = 0;            // Disable transmission
-    U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
+    U1STAbits.URXISEL = 1;          // Interrupt when there's one thing in the buffer
     
     // Timer Setup
     T1CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
@@ -124,8 +128,12 @@ int setup(void) {
     OC1CON1bits.OCM = 0b110;          // Edge-aligned PWM
     OC1CON2bits.SYNCSEL = 0b01011;
     OC1CON2 = 0x0000;
-    //OCxCON2bits.OCINV lets you invert the output. 
-    
+//    OC1CON2bits.OCINV = 1; // lets you invert the output. 
+//    OC2CON2bits.OCINV = 1; // lets you invert the output. 
+//    OC3CON2bits.OCINV = 1; // lets you invert the output. 
+//    OC4CON2bits.OCINV = 1; // lets you invert the output. 
+//    OC5CON2bits.OCINV = 1; // lets you invert the output. 
+
     OC2CON1 = 0x1006;
     OC2CON2 = 0x0000;
     OC3CON1 = 0x1006;
@@ -172,7 +180,7 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt() {
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     _U1RXIF = 0;
     if (U1STAbits.FERR == 1) {      // Framing error 
-        U1STAbits.FERR = 0;         // Clear framing error
+//        U1STAbits.FERR = 0;         // Clear framing error
         break_seen = 1;             // Remember that we have seen a break
         
         temp = (char) U1RXREG;      // Read receive register
@@ -187,7 +195,7 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
             // I'm fairly sure this line goes here, but not 100%
             channel = 0;            // Reset channel count
             chip_channel = 0;       // Reset chip channel count
-            //asm("btg LATB, #6");
+            asm("btg LATB, #6");
         }
         else {
             // If we're not starting over at the beginning of the frame, move on
