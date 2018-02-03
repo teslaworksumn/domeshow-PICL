@@ -11,6 +11,7 @@
 #include "xc.h"
 #include "stdint.h"
 #include <p24Fxxxx.h>
+#include "crc16_xmodem.h"
 
 // CW1: FLASH CONFIGURATION WORD 1 (see PIC24 Family Reference Manual 24.1)
 #pragma config FWDTEN = OFF         // Watchdog Timer Enable (Watchdog Timer is disabled)
@@ -75,9 +76,9 @@ int setup(void) {
     U1MODEbits.UARTEN = 1;
     U1MODEbits.UEN = 0;
     U1MODEbits.BRGH = 1;            // Use high speed baud rate generation
-    U1BRG = 15;                     // 250 kilobit per second baud rate
+    U1BRG = 416;                     // 15=>250 kilobit per second baud rate
     U1MODEbits.PDSEL = 0;           // 8-bit data, no parity
-    U1MODEbits.STSEL = 1;           // 2 stop bits
+    U1MODEbits.STSEL = 0;           // 1=>2 stop bits
     U1STAbits.UTXEN = 0;            // Disable transmission
     U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
     
@@ -144,16 +145,15 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt() {
     }
     */
     // Write to OCRx registers
-    
+    /*
     OC1R = channelValues[0];
     OC2R = channelValues[1];
     OC3R = channelValues[2];
-    OC4R = channelValues[3];
+    OC4R = channelValues[3];*/
     //OC5R = levels[4];
-    asm("btg LATB, #15");
+    
     
 }
-
 
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     char temp;
@@ -178,6 +178,7 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
 
     if(_U1RXIE & _U1RXIF)
     {
+        
         _U1RXIF=0; // Clear interrupt flag
 
         // Check for framing error
@@ -187,11 +188,13 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
         } else if (U1STAbits.OERR) {
             // clear error
         } else {
+            asm("btg LATB, #15");
             rxByte = U1RXREG;
             t = tail;
             rxData[t] = rxByte;
             t = (t + 1) & RX_BUFFER_SIZE;
             tail = t;
+            
         }
     }
 
@@ -252,6 +255,10 @@ void read_packet(uint16_t length) {
  * Write the signal
  */
 void write() {
+    OC1R = channelValues[0];
+    OC2R = channelValues[1];
+    OC3R = channelValues[2];
+    OC4R = channelValues[3];
     return; // TODO
 }
 
@@ -295,6 +302,8 @@ int main(void) {
                 }
                 break;
             case DSCOM_STATE_PROCESSING:
+                asm("btg LATB, #5");
+
                 // Decode packet (most of the data)
                 if (bytes_available() >= length) {
                     // Load data into "ready" array
@@ -302,11 +311,11 @@ int main(void) {
                     
                     // Verify using XMODEM 16 CRC
                     uint16_t readCrc = read_two_bytes();
-//                    uint16_t calculatedCrc = crc16xmodem(channelValues, length);
-//                    if (readCrc == calculatedCrc) {
-//                        // Valid packet (no corruption)
-                        write();
-//                    }
+                    uint16_t calculatedCrc = crc16xmodem(channelValues, length);
+                    if (readCrc == calculatedCrc) {
+                        // Valid packet (no corruption)
+                      write();
+                    }
                     dscom_rx_state = DSCOM_STATE_READY;
                 }
                 break;
