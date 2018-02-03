@@ -116,6 +116,30 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     }
 }
 
+/*
+ * interrupt from pic18
+    uint8_t rxByte;
+    uint16_t t;
+
+    if(RC1IE & RC1IF)
+    {
+        RC1IF=0; // Clear interrupt flag
+
+        // Check for framing error
+        if(RCSTA1bits.FERR)
+        {
+            rxByte = RCREG1; // Clear framing error
+        } else if (RCSTA1bits.OERR) {
+            // clear error
+        } else {
+            rxByte = RCREG1;
+            t = tail;
+            rxData[t] = rxByte;
+            t = (t + 1) & RX_BUFFER_SIZE;
+            tail = t;
+        }
+    }
+ */
 
 uint16_t get_tail() {
     RC1IE = 0; // Disable interrupts to read value
