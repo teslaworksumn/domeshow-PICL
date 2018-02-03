@@ -80,13 +80,15 @@ int setup(void) {
     U1MODEbits.STSEL = 1;           // 2 stop bits
     U1STAbits.UTXEN = 0;            // Disable transmission
     U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
-    
+            
     return 0;
 }
 
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     char temp;
 
+    /*
+    // interrupt old version
     _U1RXIF = 0;
     if (U1STAbits.FERR == 1) {      // Framing error, discard this byte   
         temp = (char) U1RXREG;      // Read receive register
@@ -97,37 +99,37 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
     else {                          // No framing error, use this byte
         temp = (char) U1RXREG;      // Use this data. Implementation to come.
     }
-}
+    */
 
-/*
- * interrupt from pic18
+    // interrupt from pic18
     uint8_t rxByte;
     uint16_t t;
 
-    if(RC1IE & RC1IF)
+    if(_U1RXIE & _U1RXIF)
     {
-        RC1IF=0; // Clear interrupt flag
+        _U1RXIF=0; // Clear interrupt flag
 
         // Check for framing error
-        if(RCSTA1bits.FERR)
+        if(U1STAbits.FERR)
         {
-            rxByte = RCREG1; // Clear framing error
-        } else if (RCSTA1bits.OERR) {
+            rxByte = U1RXREG; // Clear framing error
+        } else if (U1STAbits.OERR) {
             // clear error
         } else {
-            rxByte = RCREG1;
+            rxByte = U1RXREG;
             t = tail;
             rxData[t] = rxByte;
             t = (t + 1) & RX_BUFFER_SIZE;
             tail = t;
         }
     }
- */
+
+}
 
 uint16_t get_tail() {
-    RC1IE = 0; // Disable interrupts to read value
+    _U1RXIE = 0; // Disable interrupts to read value
     uint16_t t = tail;
-    RC1IE = 1; // Re-enable interrupts
+    _U1RXIE = 1; // Re-enable interrupts
     return t;
 }
 
@@ -150,9 +152,9 @@ uint16_t bytes_available() {
  * Assumes that there is at least one byte to read
  */
 __inline uint8_t read_byte() {
-    RC1IE = 0; // Disable interrupts to read value
+    _U1RXIE = 0; // Disable interrupts to read value
     uint8_t byte = rxData[head];
-    RC1IE = 1; // Re-enable interrupts
+    _U1RXIE = 1; // Re-enable interrupts
     head = (head + 1) & RX_BUFFER_SIZE;
     return byte;
 }
