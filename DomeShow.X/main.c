@@ -117,6 +117,13 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
 }
 
 
+uint16_t get_tail() {
+    RC1IE = 0; // Disable interrupts to read value
+    uint16_t t = tail;
+    RC1IE = 1; // Re-enable interrupts
+    return t;
+}
+
 /*
  * Returns the number of bytes in the ring buffer that can be used currently.
  * Intentionally off by one to account for race conditions with interrupts
