@@ -2,10 +2,8 @@
  * Dome Show Firmware
  * for Tesla Works
  * Authors: Ryan Fredlund, Katie Manderfeld, Ian Smith
- * Last updated: 9/7/2017
+ * Last updated: 2/3/2018
  * 
- * References:
- * - http://www.microchip.com/forums/m355304.aspx (UART ISR)
  */
 
 #include "xc.h"
@@ -36,21 +34,22 @@
 
 // State of the domeshow RX
 typedef enum {
-    DSCOM_STATE_READY,
+    DSCOM_STATE_WAITING,
+    DSCOM_STATE_MAGIC,
     DSCOM_STATE_PRE_PROCESSING,
     DSCOM_STATE_PROCESSING
 } DSCOM_RX_STATE_t;
 
 uint8_t startChannel = BOARD_ADDRESS * BOARD_CHANNELS;
 uint8_t channelValues[MAX_PAYLOAD_SIZE];
-DSCOM_RX_STATE_t dscom_rx_state = DSCOM_STATE_READY;
+DSCOM_RX_STATE_t dscom_rx_state = DSCOM_STATE_WAITING;
 volatile uint8_t rxData[RX_BUFFER_SIZE];
 uint16_t head = 0;
 volatile uint16_t tail;
 unsigned char crc_start = 0;
 unsigned char crc_end = 0;
 uint8_t num_magic_found = 0;
-uint8_t magic[4] = {0xDE, 0xAD, 0xBE, 0xEF};
+uint8_t magic[4] = {0xDE, 0xAD, 0xFF, 0xFF};
 
 int setup(void) {
     // Set up clock
@@ -76,7 +75,7 @@ int setup(void) {
     U1MODEbits.UARTEN = 1;
     U1MODEbits.UEN = 0;
     U1MODEbits.BRGH = 1;            // Use high speed baud rate generation
-    U1BRG = 416;                     // 15=>250 kilobit per second baud rate
+    U1BRG = 103;                     // 15=>250 kilobit per second baud rate
     U1MODEbits.PDSEL = 0;           // 8-bit data, no parity
     U1MODEbits.STSEL = 0;           // 1=>2 stop bits
     U1STAbits.UTXEN = 0;            // Disable transmission
@@ -152,11 +151,11 @@ void __attribute__((__interrupt__, __auto_psv__)) _T2Interrupt() {
     OC4R = channelValues[3];*/
     //OC5R = levels[4];
     
-    
+    //TODO:Quick/hacky fix... try only updating PWM every 3 UART frame receives
 }
 
 void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
-    char temp;
+    //char temp;
 
     /*
     // interrupt old version
@@ -189,7 +188,10 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
             // clear error
         } else {
             asm("btg LATB, #15");
-            rxByte = U1RXREG;
+            rxByte = (char) U1RXREG; //add cast to char????
+            if (rxByte == 255) {
+                asm("btg LATB, #5");
+            }
             t = tail;
             rxData[t] = rxByte;
             t = (t + 1) & RX_BUFFER_SIZE;
@@ -245,6 +247,7 @@ __inline uint16_t read_two_bytes() {
 
 void read_packet(uint16_t length) {
     unsigned int i = 0;
+    // Read to the half not being sent
     while (i < length) {
         channelValues[i] = read_byte();
         i++;
@@ -259,7 +262,6 @@ void write() {
     OC2R = channelValues[1];
     OC3R = channelValues[2];
     OC4R = channelValues[3];
-    return; // TODO
 }
 
 int main(void) {
@@ -271,7 +273,19 @@ int main(void) {
     
     while(1) {
         switch (dscom_rx_state) {
-            case DSCOM_STATE_READY:
+            case DSCOM_STATE_WAITING:
+                
+                // Wait for magic bytes
+                num_bytes = bytes_available();
+                if (num_bytes > 0) {
+                    rxByte = read_byte();
+                    if (rxByte == magic[0]) {
+                        num_magic_found += 1;
+                        dscom_rx_state = DSCOM_STATE_MAGIC;
+                    }
+                }
+                break;
+            case DSCOM_STATE_MAGIC:
                 // Wait for magic bytes
                 num_bytes = bytes_available();
                 if (num_bytes > 0) {
@@ -286,24 +300,25 @@ int main(void) {
                     } else {
                         // Not a magic sequence. Start over
                         num_magic_found = 0;
+                        dscom_rx_state = DSCOM_STATE_WAITING;
                     }
                 }
                 break;
             case DSCOM_STATE_PRE_PROCESSING:
+                
                 // Decode length (two bytes)
                 if (bytes_available() >= 2) {
                     length = read_two_bytes();
+
                     // Check for invalid length
                     if (length > MAX_PAYLOAD_SIZE) {
-                        dscom_rx_state = DSCOM_STATE_READY;
+                        dscom_rx_state = DSCOM_STATE_WAITING;
                     } else {
                         dscom_rx_state = DSCOM_STATE_PROCESSING;
                     }
                 }
                 break;
             case DSCOM_STATE_PROCESSING:
-                asm("btg LATB, #5");
-
                 // Decode packet (most of the data)
                 if (bytes_available() >= length) {
                     // Load data into "ready" array
@@ -314,9 +329,9 @@ int main(void) {
                     uint16_t calculatedCrc = crc16xmodem(channelValues, length);
                     if (readCrc == calculatedCrc) {
                         // Valid packet (no corruption)
-                      write();
+                        write();
                     }
-                    dscom_rx_state = DSCOM_STATE_READY;
+                    dscom_rx_state = DSCOM_STATE_WAITING;
                 }
                 break;
             default:
