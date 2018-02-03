@@ -81,24 +81,6 @@ int setup(void) {
     U1STAbits.UTXEN = 0;            // Disable transmission
     U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
     
-    //OC Setup
-    __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
-    RPOR5bits.RP11R = 18;           // OC1
-    RPOR6bits.RP12R = 19;           // OC2
-    RPOR6bits.RP13R = 20;           // OC3
-    RPOR7bits.RP14R = 21;           // OC4
-    RPOR7bits.RP15R = 22;           // OC5
-    __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
-    
-    //Not using this yet because configuration is different between PICs
-    /*
-    OC1CON1 = 0;
-    OC1CON1bits.OCTSEL = ___;
-    OC1CON1bits.OCM = 110;
-    OC1CON2 = 0;
-    //OCxCON2bits.OCINV lets you invert the output. 
-    */
-    
     return 0;
 }
 
