@@ -2,13 +2,14 @@
  * Dome Show Firmware
  * for Tesla Works
  * Authors: Ryan Fredlund, Katie Manderfeld, Ian Smith
- * Last updated: 2/3/2018
+ * Last updated: 3/2/2018
  * 
  */
 
 #include "xc.h"
 #include "stdint.h"
 #include <p24Fxxxx.h>
+#include "domeshow.h"
 #include "crc16_xmodem.h"
 
 // CW1: FLASH CONFIGURATION WORD 1 (see PIC24 Family Reference Manual 24.1)
@@ -27,29 +28,24 @@
                                     // Fail-Safe Clock Monitor is enabled)
 #pragma config FNOSC = FRCPLL       // Oscillator Select (Fast RC Oscillator with PLL module (FRCPLL))
 
-#define BOARD_ADDRESS 0
-#define BOARD_CHANNELS 15
-#define MAX_PAYLOAD_SIZE 120
-#define RX_BUFFER_SIZE 0x03ff // 1024
 
-// State of the domeshow RX
-typedef enum {
-    DSCOM_STATE_WAITING,
-    DSCOM_STATE_MAGIC,
-    DSCOM_STATE_PRE_PROCESSING,
-    DSCOM_STATE_PROCESSING
-} DSCOM_RX_STATE_t;
-
+// Addressing
 uint8_t startChannel = BOARD_ADDRESS * BOARD_CHANNELS;
-uint8_t channelValues[MAX_PAYLOAD_SIZE];
-DSCOM_RX_STATE_t dscom_rx_state = DSCOM_STATE_WAITING;
+
+// Storage for channel values (make pointers for easier switching)
+uint8_t currValues[PAYLOAD_SIZE];
+uint8_t nextValues[PAYLOAD_SIZE];
+
+// Ring buffer for received data
 volatile uint8_t rxData[RX_BUFFER_SIZE];
+
+// Managing the ring buffer
 uint16_t head = 0;
 volatile uint16_t tail;
-unsigned char crc_start = 0;
-unsigned char crc_end = 0;
+
+// Keeping track of magic
 uint8_t num_magic_found = 0;
-uint8_t magic[4] = {0xDE, 0xAD, 0xFF, 0xFF};
+
 
 int setup(void) {
     // Set up clock
@@ -65,70 +61,15 @@ int setup(void) {
     TRISA = 0;                      // Take care of specific I/O later
     TRISB = 0;                      // UART will override, as will PPS for OC
     
-    //UART Setup
-    TRISBbits.TRISB9 = 1;
-    __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
-    RPINR18bits.U1RXR = 9;          // Use Pin RP9 = "9", for UART Rx (Table 10-2)
-    __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
-    IEC0bits.U1RXIE = 1;            // Enable receive interrupt
-    IPC2bits.U1RXIP = 7;            // Set interrupt priority
-    U1MODEbits.UARTEN = 1;
-    U1MODEbits.UEN = 0;
-    U1MODEbits.BRGH = 1;            // Use high speed baud rate generation
-    U1BRG = 103;                     // 15=>250 kilobit per second baud rate
-    U1MODEbits.PDSEL = 0;           // 8-bit data, no parity
-    U1MODEbits.STSEL = 0;           // 1=>2 stop bits
-    U1STAbits.UTXEN = 0;            // Disable transmission
-    U1STAbits.URXISEL = 2;          // TODO: Double-check this!!
+    setupUART();
     
-    // Timer Setup
-    T1CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
-    T1CONbits.TCKPS = 0b00;         // 1:1 with system clock
-    TMR1 = 0;
-    PR1 = 256;
-    T1CONbits.TON = 1;
+    setupPWM();
     
-    T2CONbits.T32 = 0;
-    T2CONbits.TCS = 0;              // Use 1/2 Fosc (16 MHz)
-    T2CONbits.TCKPS = 0b00;         // 1/8 system clock
-    TMR2 = 0;
-    PR2 = 65535;
-    _T2IE = 1;
-    T2CONbits.TON = 1;
-    
-    // OC Setup
-    __builtin_write_OSCCONL(OSCCON & 0xbf); // unlock PPS
-    RPOR5bits.RP11R = 18;           // OC1
-    RPOR6bits.RP12R = 19;           // OC2
-    RPOR6bits.RP13R = 20;           // OC3
-    RPOR7bits.RP14R = 21;           // OC4
-    //RPOR7bits.RP15R = 22;           // OC5
-    __builtin_write_OSCCONL(OSCCON | 0x40); // lock PPS
-    
-    OC1CON1 = 0;
-    OC1CON1bits.OCTSEL = 4;         // Use Timer1
-    OC1CON1bits.OCM = 0b110;          // Edge-aligned PWM
-    OC1CON2bits.SYNCSEL = 0b01011;
-    OC1CON2 = 0x0000;
-    //OCxCON2bits.OCINV lets you invert the output. 
-    
-    OC2CON1 = 0x1006;
-    OC2CON2 = 0x0000;
-    OC3CON1 = 0x1006;
-    OC3CON2 = 0x0000;
-    OC4CON1 = 0x1006;
-    OC4CON2 = 0x0000;
-    //OC5CON1 = 0x1006;
-    //OC5CON2 = 0;
-    OC2CON2bits.SYNCSEL = 0b01011;
-    OC3CON2bits.SYNCSEL = 0b01011;
-    OC4CON2bits.SYNCSEL = 0b01011;
-    
-    OC1RS = 255;
-    OC2RS = 255;
-    OC3RS = 255;
-    OC4RS = 255;
-    //OC5RS = 255;
+    // Set up arrays
+    int i;
+    for (i = 0; i < PAYLOAD_SIZE; i++) {
+        currValues[i] = 255;
+    }
     
     return 0;
 }
@@ -184,19 +125,26 @@ void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt() {
         if(U1STAbits.FERR)
         {
             rxByte = U1RXREG; // Clear framing error
+            num_magic_found = 0;
+            dscom_rx_state = DSCOM_STATE_WAITING; // Go to Waiting state on framing error
         } else if (U1STAbits.OERR) {
-            // clear error
+            // Clear overflow error and go to Waiting state
+            rxByte = U1RXREG; // Clear framing error
+            num_magic_found = 0;
+            dscom_rx_state = DSCOM_STATE_WAITING; // Go to Waiting state on framing error
         } else {
             asm("btg LATB, #15");
             rxByte = (char) U1RXREG; //add cast to char????
-            if (rxByte == 255) {
-                asm("btg LATB, #5");
-            }
+
+//            _U1RXIE = 0; // Disable interrupts to set new tail value
+
+            // Add byte to rxData ring buffer
             t = tail;
             rxData[t] = rxByte;
             t = (t + 1) & RX_BUFFER_SIZE;
             tail = t;
-            
+        
+//            _U1RXIE = 1; // Re-enable interrupts
         }
     }
 
@@ -211,14 +159,12 @@ uint16_t get_tail() {
 
 /*
  * Returns the number of bytes in the ring buffer that can be used currently.
- * Intentionally off by one to account for race conditions with interrupts
- * (giving a one byte buffer between head and tail)
  */
 uint16_t bytes_available() {
     uint16_t t = get_tail();
-    uint16_t available = t - head;
+    uint16_t available = t - head + 1;
     if (t < head) { // Looped around ring buffer
-        available = RX_BUFFER_SIZE - head + t;
+        available = RX_BUFFER_SIZE - head + t + 1;
     }
     return available;
 }
@@ -247,43 +193,55 @@ __inline uint16_t read_two_bytes() {
 
 void read_packet(uint16_t length) {
     unsigned int i = 0;
-    // Read to the half not being sent
+
+    _U1RXIE = 0; // Disable interrupts to read values
     while (i < length) {
-        channelValues[i] = read_byte();
+        // Read
+        nextValues[i] = rxData[head];
+        
+        // Update head and i
+        head = (head + 1) & RX_BUFFER_SIZE;
         i++;
     }
+    _U1RXIE = 1; // Re-enable interrupts
 }
 
 /*
  * Write the signal
  */
 void write() {
-    OC1R = channelValues[0];
-    OC2R = channelValues[1];
-    OC3R = channelValues[2];
-    OC4R = channelValues[3];
+    OC1RS = currValues[0];
+    OC2RS = currValues[1];
+    OC3RS = currValues[2];
+    OC4RS = currValues[3];
 }
 
 int main(void) {
     setup();
     
     uint8_t rxByte;
-    uint16_t length;
+    uint8_t i;
     uint16_t num_bytes;
+    uint16_t readCrc;
+    uint16_t calculatedCrc;
     
     while(1) {
+        // Write to output each time
+        write();
+        
         switch (dscom_rx_state) {
             case DSCOM_STATE_WAITING:
-                
                 // Wait for magic bytes
                 num_bytes = bytes_available();
                 if (num_bytes > 0) {
+                    // If we have a byte, check it
                     rxByte = read_byte();
                     if (rxByte == magic[0]) {
                         num_magic_found += 1;
                         dscom_rx_state = DSCOM_STATE_MAGIC;
                     }
                 }
+                
                 break;
             case DSCOM_STATE_MAGIC:
                 // Wait for magic bytes
@@ -293,8 +251,8 @@ int main(void) {
                     if (rxByte == magic[num_magic_found]) {
                         num_magic_found++;
                         // If all magic found, move on
-                        if (num_magic_found == 4) {
-                            dscom_rx_state = DSCOM_STATE_PRE_PROCESSING;
+                        if (num_magic_found == 6) {
+                            dscom_rx_state = DSCOM_STATE_READING;
                             num_magic_found = 0;
                         }
                     } else {
@@ -303,36 +261,37 @@ int main(void) {
                         dscom_rx_state = DSCOM_STATE_WAITING;
                     }
                 }
-                break;
-            case DSCOM_STATE_PRE_PROCESSING:
                 
-                // Decode length (two bytes)
-                if (bytes_available() >= 2) {
-                    length = read_two_bytes();
-
-                    // Check for invalid length
-                    if (length > MAX_PAYLOAD_SIZE) {
-                        dscom_rx_state = DSCOM_STATE_WAITING;
-                    } else {
-                        dscom_rx_state = DSCOM_STATE_PROCESSING;
-                    }
+                break;
+            case DSCOM_STATE_READING:
+                // Decode packet (most of the data)
+                if (bytes_available() >= PAYLOAD_SIZE) {
+                    // Load data into "next" array
+                    read_packet(PAYLOAD_SIZE);
+                    
+                    // Process packet
+                    dscom_rx_state = DSCOM_STATE_PROCESSING;
                 }
+                
                 break;
             case DSCOM_STATE_PROCESSING:
-                // Decode packet (most of the data)
-                if (bytes_available() >= length) {
-                    // Load data into "ready" array
-                    read_packet(length);
-                    
-                    // Verify using XMODEM 16 CRC
-                    uint16_t readCrc = read_two_bytes();
-                    uint16_t calculatedCrc = crc16xmodem(channelValues, length);
-                    if (readCrc == calculatedCrc) {
-                        // Valid packet (no corruption)
-                        write();
+                // Verify using XMODEM 16 CRC
+                readCrc = read_two_bytes();
+                calculatedCrc = crc16xmodem(nextValues, PAYLOAD_SIZE);
+
+                // Check for valid packet (no corruption)
+                if (readCrc == calculatedCrc) {
+
+                    // Switch current and next arrays
+                    // TODO: do this by switching pointers (no copying)
+                    for (i = 0; i < PAYLOAD_SIZE; i++) {
+                        currValues[i] = nextValues[i];
                     }
-                    dscom_rx_state = DSCOM_STATE_WAITING;
                 }
+
+                // Go back to waiting for next packet
+                dscom_rx_state = DSCOM_STATE_WAITING;
+
                 break;
             default:
                 break;
