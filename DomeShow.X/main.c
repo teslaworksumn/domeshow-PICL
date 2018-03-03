@@ -210,10 +210,10 @@ void read_packet(uint16_t length) {
  * Write the signal
  */
 void write() {
-    OC1RS = currValues[0];
-    OC2RS = currValues[1];
-    OC3RS = currValues[2];
-    OC4RS = currValues[3];
+    OC1R = currValues[0];
+    OC2R = currValues[1];
+    OC3R = currValues[2];
+    OC4R = currValues[3];
 }
 
 int main(void) {
