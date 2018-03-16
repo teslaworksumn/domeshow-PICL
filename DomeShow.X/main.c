@@ -44,10 +44,12 @@ enum DMX_STATE dmxState = DMX_WAIT_FOR_BREAK;
 volatile uint8_t channelValues[NUM_BOARD_CHANNELS];
 volatile int channelIndex = 0;
 
+uint16_t counter = 0;
+
 // I2C constants
 #define SLAVE_I2C_GENERIC_RETRY_MAX 100
 #define SLAVE_I2C_GENERIC_DEVICE_TIMEOUT 50
-#define I2C_PENDING_DELAY_MS 1
+#define I2C_PENDING_DELAY_MS 0
 
 // Forward declarations
 void UART_DMX_RX_Handler(void);
@@ -74,7 +76,7 @@ void UART_DMX_RX_Handler(void) {
     uint16_t endIndex = (boardAddress + 1) * NUM_BOARD_CHANNELS - 1;
     
     switch (dmxState) {
-        case DMX_WAIT_FOR_BREAK:
+        case DMX_WAIT_FOR_BREAK:            
             // We are trying to find the break condition.
             // Wait until a framing error is received (which indicates the break condition)
             if (U1STAbits.FERR == 1) {
@@ -89,7 +91,7 @@ void UART_DMX_RX_Handler(void) {
             }
             
             break;
-        case DMX_WAIT_FOR_START:
+        case DMX_WAIT_FOR_START:            
             // Wait for a valid byte to be received
             if (U1STAbits.FERR == 1) {
                 // Clear framing error and ignore byte
@@ -131,7 +133,7 @@ void UART_DMX_RX_Handler(void) {
                 if (channelIndex >= startIndex && startIndex <= endIndex) {
                     // Store in array
                     channelValues[channelIndex - startIndex] = byte;
-                }
+                }                
 
                 // Increment channel (value byte read)
                 channelIndex++;
@@ -258,7 +260,10 @@ int main(void) {
     setup();
     
     while(1) {
-        updateLights();
+        //updateLights();
+        IO_RB14_Toggle();
+        
+        __DELAY_MS(1);
     }
     
     return 0;
